@@ -37,7 +37,7 @@ class AnalyticsService:
             {"$set": {"tenant_id": self.tenant_id, "kpi_type": "profitability",
                       "period": f"{from_date_str}_{to_date_str}", "computed_at": datetime.utcnow(),
                       "expires_at": datetime.utcnow().replace(hour=23, minute=59),
-                      "data": response.model_dump(exclude={"from_date", "to_date"})}},
+                      "data": response.model_dump(exclude={"from_date", "to_date"}, mode="json")}},
             upsert=True,
         )
         return response
