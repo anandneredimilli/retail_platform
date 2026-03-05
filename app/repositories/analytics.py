@@ -28,32 +28,73 @@ class AnalyticsRepository(BaseRepository):
 
     async def get_demand_trend(self) -> dict:
         sql = text("""
-            WITH current_year AS (
-                SELECT DATE(o.ordered_at) AS sale_date,
-                       COUNT(DISTINCT o.id) AS order_count,
-                       COALESCE(SUM(oi.quantity), 0) AS units_sold,
-                       COALESCE(SUM(o.total_revenue), 0) AS revenue
-                FROM orders o JOIN order_items oi ON oi.order_id = o.id
-                WHERE o.tenant_id = :tenant_id AND o.is_deleted = FALSE
-                  AND o.status = 'confirmed'
-                  AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW())
-                GROUP BY DATE(o.ordered_at)
-            ),
-            previous_year AS (
-                SELECT DATE(o.ordered_at) AS sale_date,
-                       COUNT(DISTINCT o.id) AS order_count,
-                       COALESCE(SUM(oi.quantity), 0) AS units_sold,
-                       COALESCE(SUM(o.total_revenue), 0) AS revenue
-                FROM orders o JOIN order_items oi ON oi.order_id = o.id
-                WHERE o.tenant_id = :tenant_id AND o.is_deleted = FALSE
-                  AND o.status = 'confirmed'
-                  AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW()) - 1
-                GROUP BY DATE(o.ordered_at)
-            )
-            SELECT 'current' AS year_type, * FROM current_year
-            UNION ALL
-            SELECT 'previous' AS year_type, * FROM previous_year
-        """)
+                    WITH order_totals AS (
+                        SELECT
+                            DATE(o.ordered_at)            AS sale_date,
+                            COUNT(o.id)                   AS order_count,
+                            SUM(o.total_revenue)          AS revenue
+                        FROM orders o
+                        WHERE o.tenant_id  = :tenant_id
+                        AND o.is_deleted = FALSE
+                        AND o.status     = 'confirmed'
+                        AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW())
+                        GROUP BY DATE(o.ordered_at)
+                    ),
+                    item_totals AS (
+                        SELECT
+                            DATE(o.ordered_at)            AS sale_date,
+                            SUM(oi.quantity)              AS units_sold
+                        FROM orders o
+                        JOIN order_items oi ON oi.order_id = o.id
+                        WHERE o.tenant_id  = :tenant_id
+                        AND o.is_deleted = FALSE
+                        AND o.status     = 'confirmed'
+                        AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW())
+                        GROUP BY DATE(o.ordered_at)
+                    )
+                    SELECT
+                        'current'          AS year_type,
+                        ot.sale_date,
+                        ot.order_count,
+                        it.units_sold,
+                        ot.revenue
+                    FROM order_totals ot
+                    LEFT JOIN item_totals it ON it.sale_date = ot.sale_date
+
+                    UNION ALL
+
+                    -- Same for previous year
+                    SELECT
+                        'previous'         AS year_type,
+                        ot.sale_date,
+                        ot.order_count,
+                        it.units_sold,
+                        ot.revenue
+                    FROM (
+                        SELECT
+                            DATE(o.ordered_at)  AS sale_date,
+                            COUNT(o.id)         AS order_count,
+                            SUM(o.total_revenue) AS revenue
+                        FROM orders o
+                        WHERE o.tenant_id  = :tenant_id
+                        AND o.is_deleted = FALSE
+                        AND o.status     = 'confirmed'
+                        AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW()) - 1
+                        GROUP BY DATE(o.ordered_at)
+                    ) ot
+                    LEFT JOIN (
+                        SELECT
+                            DATE(o.ordered_at)  AS sale_date,
+                            SUM(oi.quantity)    AS units_sold
+                        FROM orders o
+                        JOIN order_items oi ON oi.order_id = o.id
+                        WHERE o.tenant_id  = :tenant_id
+                        AND o.is_deleted = FALSE
+                        AND o.status     = 'confirmed'
+                        AND EXTRACT(YEAR FROM o.ordered_at) = EXTRACT(YEAR FROM NOW()) - 1
+                        GROUP BY DATE(o.ordered_at)
+                    ) it ON it.sale_date = ot.sale_date
+                """)
         result = await self.db.execute(sql, {"tenant_id": self.tenant_id})
         rows = result.mappings().all()
         current, previous = [], []
